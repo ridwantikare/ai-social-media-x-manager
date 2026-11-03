@@ -1,0 +1,524 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>AI Social Media Manager — Project Documentation</title><style>@page{size:A4;margin:18mm 16mm} :root{--ink:#172033;--muted:#536174;--accent:#087f8c;--line:#d9e2ea;--soft:#f4f8fa} *{box-sizing:border-box} body{margin:0 auto;max-width:980px;padding:42px 34px 70px;color:var(--ink);background:#fff;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;line-height:1.62;font-size:15px} h1{color:#073b4c;font-size:2.2rem;line-height:1.15;margin:0 0 1.2rem;padding-bottom:1rem;border-bottom:4px solid var(--accent)} h2{color:#073b4c;font-size:1.55rem;margin:2.8rem 0 1rem;padding-bottom:.35rem;border-bottom:1px solid var(--line);page-break-after:avoid} h3{color:#0b6470;font-size:1.15rem;margin:1.8rem 0 .55rem;page-break-after:avoid} h4,h5,h6{color:#0b6470;margin:1.3rem 0 .4rem} p,ul,ol,blockquote,pre,.table-wrap{margin:0 0 1rem} ul,ol{padding-left:1.45rem} li{margin:.25rem 0} a{color:var(--accent)} strong{color:#0b5260} code{background:#edf3f5;color:#124e5a;padding:.12rem .35rem;border-radius:4px;font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.88em} pre{overflow:auto;background:#12202d;color:#e8f1f5;padding:1rem 1.1rem;border-radius:8px;font-size:12px;line-height:1.5;page-break-inside:avoid} pre code{padding:0;color:inherit;background:none} blockquote{margin-left:0;padding:.65rem 1rem;border-left:4px solid var(--accent);background:var(--soft);color:var(--muted)} hr{border:0;border-top:1px solid var(--line);margin:2rem 0}.table-wrap{overflow-x:auto;page-break-inside:avoid}table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;vertical-align:top;border:1px solid var(--line);padding:.55rem .65rem}th{background:#e8f4f5;color:#073b4c;font-weight:700}tr:nth-child(even) td{background:#fafcfd}@media print{body{padding:0;max-width:none;font-size:10.5pt}h1{font-size:25pt}h2{font-size:17pt}h3{font-size:13pt}a{color:inherit;text-decoration:none}}@media(max-width:700px){body{padding:24px 18px 50px;font-size:14px}h1{font-size:1.8rem}}</style></head><body><h1>AI Social Media Manager — Project Documentation</h1>
+<h2>1. Project overview</h2>
+<p>The AI Social Media Manager is a single-user social-media command center for creating, reviewing, approving, and publishing content to X/Twitter.</p>
+<p>The application combines:</p>
+<ul><li>A React dashboard for managing content, keywords, settings, and analytics.</li><li>An Express API server for business logic and integrations.</li><li>PostgreSQL for persistent content and configuration data.</li><li>Gemini 2.5 Flash for content generation.</li><li>Gemini Google Search grounding for trend-aware content generation.</li><li>Telegram for human approval before publishing.</li><li>Zernio for publishing approved content to an X/Twitter account.</li><li>A background scheduler for optional automatic content generation.</li></ul>
+<p>The central product decision is <strong>human-in-the-loop publishing</strong>: AI can propose content, but content is not published until a person approves it from the dashboard or Telegram.</p>
+<h2>2. What the product does</h2>
+<h3>Manual generation</h3>
+<p>An operator can generate:</p>
+<ul><li>Tweets</li><li>Replies</li><li>Content ideas</li></ul>
+<p>The operator chooses a topic or leaves the topic blank. When the topic is blank, the API selects one tracked keyword at random. The generated items are stored as <code>pending</code> and, when Telegram is enabled, sent to the configured group for approval.</p>
+<h3>Trending generation</h3>
+<p>The operator can request tweets based on current high-engagement topics relevant to the configured client niche. Gemini is given the Google Search tool and is asked to return topic/tweet pairs. Each pair becomes a pending tweet and follows the same approval process as ordinary generated content.</p>
+<p>This is web-search grounding, not a direct X firehose or X Trends API integration. The quality and freshness of the result depends on the search results available to Gemini at the time of the request.</p>
+<h3>Telegram approval</h3>
+<p>Each pending item can be approved, rejected, or edited from Telegram:</p>
+<ol><li>The bot sends the content with inline buttons.</li><li><code>Approve &amp; Post</code> calls the approval handler.</li><li>The approval handler publishes through Zernio.</li><li>A successful post is marked <code>posted</code> and stores the returned X URL.</li><li><code>Reject</code> marks the item <code>rejected</code>.</li><li><code>Edit</code> asks the reviewer to reply with replacement text.</li><li>The edited text is saved and a new approval message is sent.</li></ol>
+<h3>Automatic generation</h3>
+<p>When automatic generation is enabled, the API server schedules a repeating timeout. At each interval it:</p>
+<ol><li>Reads the current settings.</li><li>Stops for that run if auto-generation is disabled.</li><li>Selects a tracked keyword at random.</li><li>Generates one tweet.</li><li>Stores it as <code>pending</code>.</li><li>Sends it to Telegram when Telegram approval is enabled.</li></ol>
+<p>The scheduler runs inside the API process. The API service must therefore stay running continuously for automatic generation and Telegram polling to work.</p>
+<h2>3. Architecture</h2>
+<pre class="language-mermaid"><code>flowchart LR
+    Browser[React dashboard] --&gt;|HTTP /api| API[Express API server]
+    TelegramUser[Reviewer in Telegram group] --&gt;|commands and buttons| Bot[Telegraf bot]
+    Bot --&gt; API
+    API --&gt; DB[(PostgreSQL)]
+    API --&gt; Gemini[Gemini 2.5 Flash]
+    Gemini --&gt; Search[Google Search grounding]
+    API --&gt; Telegram[Telegram Bot API]
+    API --&gt; Zernio[Zernio API]
+    Zernio --&gt; X[X/Twitter]</code></pre>
+<h3>Runtime responsibilities</h3>
+<div class="table-wrap"><table><thead><tr><th>Component</th><th>Responsibility</th></tr></thead><tbody><tr><td>Dashboard</td><td>Provides the browser UI and calls generated React Query hooks.</td></tr><tr><td>API server</td><td>Owns validation, database writes, AI calls, approval logic, scheduling, and integrations.</td></tr><tr><td>Database library</td><td>Creates the PostgreSQL connection and exports Drizzle schemas.</td></tr><tr><td>API specification</td><td>Defines the HTTP contract before generated client/server types are used.</td></tr><tr><td>Generated client</td><td>Exposes typed React Query hooks to the dashboard.</td></tr><tr><td>Generated Zod schemas</td><td>Validates request bodies and response payloads.</td></tr><tr><td>Telegram bot</td><td>Provides phone-friendly commands, approval buttons, and edit replies.</td></tr><tr><td>Gemini client</td><td>Creates original content and trend-aware content.</td></tr><tr><td>Zernio client</td><td>Publishes approved content to the selected X account.</td></tr></tbody></table></div>
+<h3>Hosting model</h3>
+<p>The current Replit setup uses two application services:</p>
+<ul><li><code>artifacts/api-server</code>: long-running API, bot, scheduler, and integration</li></ul>
+<p>process.</p>
+<ul><li><code>artifacts/dashboard</code>: Vite development/build server for the web interface.</li></ul>
+<p>Replit routes the dashboard at <code>/</code> and the API at <code>/api</code>. The API itself also mounts its router under <code>/api</code>, so the dashboard can use relative requests such as <code>/api/content</code>.</p>
+<h2>4. Repository structure</h2>
+<pre class="language-text"><code>.
+├── artifacts/
+│   ├── api-server/
+│   │   ├── src/
+│   │   │   ├── app.ts                 # Express middleware and /api mount
+│   │   │   ├── index.ts               # Startup and handler wiring
+│   │   │   ├── lib/
+│   │   │   │   ├── gemini.ts          # AI generation and trend search
+│   │   │   │   ├── logger.ts          # Pino logger and redaction
+│   │   │   │   ├── scheduler.ts       # Automatic generation timer
+│   │   │   │   ├── telegram.ts        # Bot commands and approval buttons
+│   │   │   │   └── zernio-client.ts   # X publishing wrapper
+│   │   │   └── routes/
+│   │   │       ├── analytics.ts       # Counts and posted history
+│   │   │       ├── content.ts         # Generation and queue operations
+│   │   │       ├── health.ts          # Health check
+│   │   │       ├── index.ts           # Route composition
+│   │   │       ├── keywords.ts        # Keyword CRUD
+│   │   │       ├── settings.ts        # Singleton app settings
+│   │   │       └── zernio.ts          # Connected accounts and profiles
+│   │   ├── build.mjs                  # esbuild production bundle
+│   │   └── package.json
+│   └── dashboard/
+│       ├── src/
+│       │   ├── App.tsx                # Query provider and routes
+│       │   ├── components/
+│       │   │   ├── layout.tsx         # Navigation shell
+│       │   │   └── ui/                # Reusable shadcn/Radix UI
+│       │   ├── pages/
+│       │   │   ├── analytics.tsx
+│       │   │   ├── content.tsx
+│       │   │   ├── dashboard.tsx
+│       │   │   ├── keywords.tsx
+│       │   │   ├── not-found.tsx
+│       │   │   └── settings.tsx
+│       │   └── index.css               # Dark theme and design tokens
+│       ├── vite.config.ts
+│       └── package.json
+├── lib/
+│   ├── api-client-react/               # Generated React Query client
+│   ├── api-spec/
+│   │   ├── openapi.yaml                # API source of truth
+│   │   └── orval.config.ts
+│   ├── api-zod/                        # Generated request/response schemas
+│   └── db/
+│       ├── src/index.ts                # Drizzle database connection
+│       ├── src/schema/
+│       └── drizzle.config.ts
+├── docs/
+│   └── PROJECT_DOCUMENTATION.md        # This document
+├── scripts/
+├── package.json
+├── pnpm-workspace.yaml
+└── replit.md</code></pre>
+<h2>5. Technology choices</h2>
+<h3>Backend</h3>
+<ul><li>Node.js and TypeScript</li><li>Express 5</li><li>Pino and <code>pino-http</code> for structured logging</li><li>PostgreSQL</li><li>Drizzle ORM</li><li>Zod and <code>drizzle-zod</code> for validation</li><li>esbuild for the production server bundle</li></ul>
+<h3>AI and integrations</h3>
+<ul><li><code>@google/genai</code></li><li>Gemini model: <code>gemini-2.5-flash</code></li><li>Gemini Google Search tool for trending generation</li><li><code>telegraf</code> in polling mode</li><li><code>@zernio/node</code> for connected social accounts and publishing</li></ul>
+<h3>Frontend</h3>
+<ul><li>React</li><li>Vite</li><li>TypeScript</li><li>TanStack React Query</li><li>Wouter</li><li>React Hook Form</li><li>Zod form validation</li><li>Tailwind CSS</li><li>Radix UI/shadcn-style components</li><li>Lucide icons</li><li>Recharts for analytics visualizations where applicable</li></ul>
+<h3>Workspace and code generation</h3>
+<p>The project is a pnpm monorepo. The OpenAPI specification is the contract between the API and dashboard:</p>
+<pre class="language-text"><code>lib/api-spec/openapi.yaml
+          │
+          ├── Orval
+          │
+          ├── lib/api-client-react/src/generated/
+          └── lib/api-zod/src/generated/</code></pre>
+<p>Do not manually edit generated files. Edit <code>openapi.yaml</code>, run code generation, then use the resulting hooks and schemas.</p>
+<h2>6. Environment variables</h2>
+<p>Set these values in the deployment's secret/environment-variable manager. Do not commit them to the repository or put them in frontend code.</p>
+<div class="table-wrap"><table><thead><tr><th>Variable</th><th>Required</th><th>Used by</th><th>Purpose</th></tr></thead><tbody><tr><td><code>DATABASE_URL</code></td><td>Yes</td><td>API and database package</td><td>PostgreSQL connection string.</td></tr><tr><td><code>GEMINI_API_KEY</code></td><td>Yes</td><td>API</td><td>Credentials for <code>@google/genai</code>.</td></tr><tr><td><code>TELEGRAM_BOT_TOKEN</code></td><td>Yes</td><td>API</td><td>Token created for the Telegram bot.</td></tr><tr><td><code>TELEGRAM_GROUP_CHAT_ID</code></td><td>Yes</td><td>API</td><td>Destination group for approval messages.</td></tr><tr><td><code>ZERNIO_API_KEY</code></td><td>Yes</td><td>API</td><td>Credentials for the Zernio SDK.</td></tr><tr><td><code>PORT</code></td><td>Yes</td><td>API and dashboard workflows</td><td>Port supplied by the hosting platform.</td></tr><tr><td><code>BASE_PATH</code></td><td>Dashboard workflow</td><td>Dashboard</td><td>Vite base path supplied by the hosting platform.</td></tr><tr><td><code>NODE_ENV</code></td><td>Recommended</td><td>API</td><td>Set to <code>production</code> in production.</td></tr><tr><td><code>LOG_LEVEL</code></td><td>Optional</td><td>API</td><td>Pino log level; defaults to <code>info</code>.</td></tr></tbody></table></div>
+<p><code>SESSION_SECRET</code> is present in the environment for the project, but this version deliberately has no login/session system and the current source does not consume it. Do not describe it as an active authentication feature.</p>
+<p>The Telegram variable is intentionally named <code>TELEGRAM_GROUP_CHAT_ID</code>. Older notes may refer to <code>TELEGRAM_CHAT_ID</code>; that name is not used by the current Telegram implementation.</p>
+<h2>7. Local setup</h2>
+<h3>Prerequisites</h3>
+<ul><li>Node.js 24 or a compatible current Node.js release</li><li>pnpm</li><li>A PostgreSQL database</li><li>A Gemini API key</li><li>A Telegram bot token and group chat</li><li>A Zernio API key and connected X account</li></ul>
+<h3>Install dependencies</h3>
+<pre class="language-bash"><code>pnpm install</code></pre>
+<h3>Configure environment variables</h3>
+<p>Add the variables from the table above to the local environment. Never paste real credentials into source files, Markdown, screenshots, or commit history.</p>
+<h3>Create or update the database schema</h3>
+<pre class="language-bash"><code>pnpm --filter @workspace/db run push</code></pre>
+<p>This uses Drizzle Kit and the <code>DATABASE_URL</code> value to push the schema to the configured development database. The <code>push-force</code> command exists for recovery or explicitly forced schema changes, but should not be the normal command.</p>
+<h3>Start the services</h3>
+<p>Use the configured workflows rather than starting the applications with a root-level <code>pnpm dev</code> command:</p>
+<pre class="language-bash"><code>pnpm --filter @workspace/api-server run dev
+pnpm --filter @workspace/dashboard run dev</code></pre>
+<p>The API requires a workflow-provided <code>PORT</code>. The dashboard requires both <code>PORT</code> and <code>BASE_PATH</code>.</p>
+<h3>Validate the build</h3>
+<pre class="language-bash"><code>pnpm run typecheck
+pnpm --filter @workspace/api-server run typecheck
+pnpm --filter @workspace/dashboard run typecheck
+pnpm run build</code></pre>
+<p>The fastest health check is:</p>
+<pre class="language-bash"><code>curl http://localhost:80/api/healthz</code></pre>
+<p>When running behind a provider other than Replit, replace the proxy URL with the public API URL.</p>
+<h2>8. Telegram setup</h2>
+<h3>Create the bot</h3>
+<ol><li>Open Telegram and start a chat with <code>@BotFather</code>.</li><li>Run <code>/newbot</code>.</li><li>Choose a display name and a unique username.</li><li>Copy the bot token into <code>TELEGRAM_BOT_TOKEN</code>.</li><li>Add the bot to the approval group.</li><li>Ensure the bot is allowed to send messages and receive the required group</li></ol>
+<p>updates.</p>
+<ol><li>Set <code>TELEGRAM_GROUP_CHAT_ID</code> to the group ID.</li></ol>
+<p>The bot has a <code>/chatid</code> command that replies with the current chat ID. Run it from inside the target group and copy that ID into the secret manager. Group IDs are often negative values, so preserve the leading minus sign.</p>
+<h3>Polling behavior</h3>
+<p>The bot uses Telegraf polling:</p>
+<pre class="language-ts"><code>bot.launch({ dropPendingUpdates: true });</code></pre>
+<p>There is intentionally no webhook endpoint. This means:</p>
+<ul><li>The API process must stay alive.</li><li>Only one active bot process should poll the same bot token.</li><li>A sleeping or serverless deployment is not suitable for this service.</li><li>Restarting the service drops old queued Telegram updates by design.</li></ul>
+<h3>Commands</h3>
+<div class="table-wrap"><table><thead><tr><th>Command</th><th>Behavior</th></tr></thead><tbody><tr><td><code>/chatid</code></td><td>Replies with the current chat ID.</td></tr><tr><td><code>/generate</code></td><td>Selects a keyword, generates one tweet, and sends it for approval.</td></tr><tr><td><code>/trending</code></td><td>Searches for relevant current trends and sends up to three generated tweets for approval.</td></tr></tbody></table></div>
+<h3>Approval callbacks</h3>
+<p>Approval buttons use callback data in the form:</p>
+<pre class="language-text"><code>approve:&lt;contentId&gt;
+reject:&lt;contentId&gt;
+edit:&lt;contentId&gt;</code></pre>
+<p>The handlers are registered from <code>index.ts</code> so the Telegram adapter does not own database or publishing logic. This keeps the bot transport separate from the application use cases.</p>
+<h3>Telegram edit flow</h3>
+<p>The edit flow is intentionally reply-based:</p>
+<ol><li>The reviewer presses <code>Edit</code>.</li><li>The bot sends a force-reply prompt.</li><li>The prompt message ID is mapped to the content ID in <code>pendingEdits</code>.</li><li>The reviewer replies to that exact prompt.</li><li>The bot trims the replacement text and rejects text longer than 280</li></ol>
+<p>characters.</p>
+<ol><li>The registered edit handler updates the database and sends a fresh approval</li></ol>
+<p>message.</p>
+<p><code>pendingEdits</code> is an in-memory map. A process restart clears unfinished edit prompts. The content itself remains safe in PostgreSQL and can still be edited from the dashboard.</p>
+<h2>9. Zernio and X setup</h2>
+<ol><li>Create or access the client's Zernio account.</li><li>Connect the client's X/Twitter account in Zernio.</li><li>Create or obtain a Zernio API key.</li><li>Add the key as <code>ZERNIO_API_KEY</code>.</li><li>Start the API server.</li><li>Open <strong>Settings</strong> in the dashboard.</li><li>Use the connected-account list to select the default X account.</li><li>Save the settings.</li></ol>
+<p>The account route calls the SDK with a Twitter platform filter:</p>
+<pre class="language-ts"><code>zernio.accounts.listAccounts({
+  query: { platform: &quot;twitter&quot; },
+});</code></pre>
+<p>Publishing is centralized in <code>lib/zernio-client.ts</code>. The wrapper sends:</p>
+<pre class="language-ts"><code>{
+  body: {
+    content,
+    publishNow: !scheduledIso,
+    platforms: [{ platform: &quot;twitter&quot;, accountId }],
+  },
+}</code></pre>
+<p>For scheduled content, it includes <code>scheduledFor</code> and sets <code>publishNow</code> to <code>false</code>. The SDK response is normalized to a post ID and platform URL before the database is updated.</p>
+<h2>10. Database design</h2>
+<p>The database has three tables.</p>
+<h3><code>content_items</code></h3>
+<p>Stores every generated, edited, reviewed, and published item.</p>
+<div class="table-wrap"><table><thead><tr><th>Column</th><th>Type</th><th>Description</th></tr></thead><tbody><tr><td><code>id</code></td><td>serial primary key</td><td>Internal content ID used by API and Telegram callbacks.</td></tr><tr><td><code>type</code></td><td>text</td><td><code>tweet</code>, <code>reply</code>, or <code>idea</code>.</td></tr><tr><td><code>topic</code></td><td>text</td><td>Keyword or trend associated with the item.</td></tr><tr><td><code>content</code></td><td>text</td><td>Generated or edited text.</td></tr><tr><td><code>status</code></td><td>text</td><td><code>pending</code>, <code>approved</code>, <code>rejected</code>, or <code>posted</code>.</td></tr><tr><td><code>platform_post_url</code></td><td>text nullable</td><td>URL returned after posting to X.</td></tr><tr><td><code>zernio_account_id</code></td><td>text nullable</td><td>Account used for publishing.</td></tr><tr><td><code>telegram_message_id</code></td><td>integer nullable</td><td>Telegram approval message ID.</td></tr><tr><td><code>scheduled_for</code></td><td>timestamp nullable</td><td>Optional future publishing time.</td></tr><tr><td><code>created_at</code></td><td>timestamp</td><td>Creation time.</td></tr><tr><td><code>updated_at</code></td><td>timestamp</td><td>Last update time.</td></tr></tbody></table></div>
+<h3><code>keywords</code></h3>
+<p>Stores unique topics used by manual generation when no topic is supplied and by automatic generation.</p>
+<div class="table-wrap"><table><thead><tr><th>Column</th><th>Type</th><th>Description</th></tr></thead><tbody><tr><td><code>id</code></td><td>serial primary key</td><td>Keyword ID.</td></tr><tr><td><code>text</code></td><td>text unique</td><td>Tracked topic.</td></tr><tr><td><code>created_at</code></td><td>timestamp</td><td>Creation time.</td></tr></tbody></table></div>
+<h3><code>app_settings</code></h3>
+<p>Stores the single-user configuration row.</p>
+<div class="table-wrap"><table><thead><tr><th>Column</th><th>Type</th><th>Default</th><th>Description</th></tr></thead><tbody><tr><td><code>id</code></td><td>serial primary key</td><td>—</td><td>Settings row ID.</td></tr><tr><td><code>default_zernio_account_id</code></td><td>text nullable</td><td>null</td><td>Default account for posts.</td></tr><tr><td><code>telegram_enabled</code></td><td>boolean</td><td>true</td><td>Sends approval messages to Telegram.</td></tr><tr><td><code>auto_generate_enabled</code></td><td>boolean</td><td>false</td><td>Enables the scheduler.</td></tr><tr><td><code>generate_interval</code></td><td>integer</td><td>60</td><td>Auto-generation interval in minutes.</td></tr><tr><td><code>client_name</code></td><td>text nullable</td><td>null</td><td>Client name used in prompts.</td></tr><tr><td><code>client_niche</code></td><td>text nullable</td><td>null</td><td>Niche used in prompts and trend search.</td></tr><tr><td><code>client_tone</code></td><td>text nullable</td><td>null</td><td>Voice/tone used in prompts.</td></tr><tr><td><code>updated_at</code></td><td>timestamp</td><td>now</td><td>Last settings update.</td></tr></tbody></table></div>
+<p>The settings route creates the first row lazily when <code>/api/settings</code> is first read. This avoids requiring a separate seed script for the single-user configuration.</p>
+<h2>11. AI generation implementation</h2>
+<h3>Standard content generation</h3>
+<p><code>generateContentWithGemini</code> receives:</p>
+<pre class="language-ts"><code>type ContentType = &quot;tweet&quot; | &quot;reply&quot; | &quot;idea&quot;;
+
+generateContentWithGemini(
+  type,
+  topic,
+  clientName,
+  clientNiche,
+  clientTone,
+  count
+);</code></pre>
+<p>The prompt is specialized by content type and includes:</p>
+<ul><li>Client identity</li><li>Client niche</li><li>Requested topic</li><li>Requested tone</li><li>Maximum 280-character output</li><li>A maximum of two hashtags</li><li>Human and authentic language</li><li>A plain newline-separated response format</li></ul>
+<p>The response is normalized by trimming blank lines and taking at most the requested number of lines.</p>
+<h3>Trending generation</h3>
+<p><code>generateTrendingTweets</code> uses the same Gemini model with:</p>
+<pre class="language-ts"><code>config: {
+  tools: [{ googleSearch: {} }],
+  maxOutputTokens: 8192,
+}</code></pre>
+<p>The prompt requires this machine-readable line format:</p>
+<pre class="language-text"><code>TOPIC: [trending topic name] | TWEET: [tweet text]</code></pre>
+<p>The parser keeps only lines containing both markers, extracts the topic and tweet with regular expressions, removes empty results, and limits the result to the requested count.</p>
+<h3>AI limitations to document for clients</h3>
+<ul><li>Generated content must be reviewed before publishing.</li><li>Trend results are search-grounded and may not exactly match the X Trends</li></ul>
+<p>page.</p>
+<ul><li>Search results can change between requests.</li><li>The prompt restricts output to 280 characters, but reviewers should still</li></ul>
+<p>verify the final copy.</p>
+<ul><li>The API does not store Gemini citations or search-result provenance.</li><li>A provider error returns an error to the caller and is logged by the API.</li></ul>
+<h2>12. API design</h2>
+<p>The API is mounted at <code>/api</code>. The full contract is in <code>lib/api-spec/openapi.yaml</code>.</p>
+<h3>Health</h3>
+<pre class="language-http"><code>GET /api/healthz</code></pre>
+<p>Returns a simple healthy status.</p>
+<h3>Keywords</h3>
+<pre class="language-http"><code>GET    /api/keywords
+POST   /api/keywords
+DELETE /api/keywords/:id</code></pre>
+<p>Create body:</p>
+<pre class="language-json"><code>{
+  &quot;text&quot;: &quot;AI automation&quot;
+}</code></pre>
+<p>Duplicate keyword values return <code>409</code>.</p>
+<h3>Content queue</h3>
+<pre class="language-http"><code>GET    /api/content
+GET    /api/content/:id
+POST   /api/content/generate
+POST   /api/content/generate-trending
+PATCH  /api/content/:id
+DELETE /api/content/:id
+POST   /api/content/:id/approve
+POST   /api/content/:id/reject</code></pre>
+<p>The list endpoint accepts:</p>
+<pre class="language-text"><code>?status=pending|approved|rejected|posted
+?type=tweet|reply|idea</code></pre>
+<p>Manual generation body:</p>
+<pre class="language-json"><code>{
+  &quot;type&quot;: &quot;tweet&quot;,
+  &quot;topic&quot;: &quot;digital marketing&quot;,
+  &quot;count&quot;: 3
+}</code></pre>
+<p><code>topic</code> is optional. If omitted, the server chooses a random keyword, or uses <code>social media and content creation</code> when no keywords exist. <code>count</code> is validated between 1 and 10.</p>
+<p>Content update body:</p>
+<pre class="language-json"><code>{
+  &quot;content&quot;: &quot;Edited copy before approval&quot;,
+  &quot;status&quot;: &quot;pending&quot;,
+  &quot;scheduledFor&quot;: null
+}</code></pre>
+<p>Approval body:</p>
+<pre class="language-json"><code>{
+  &quot;zernioAccountId&quot;: &quot;optional-account-id&quot;,
+  &quot;scheduledFor&quot;: null
+}</code></pre>
+<p>If <code>zernioAccountId</code> is omitted, the server uses the configured default account. If no account is configured, the item becomes <code>approved</code> but is not posted.</p>
+<h3>Zernio</h3>
+<pre class="language-http"><code>GET /api/zernio/accounts
+GET /api/zernio/profiles</code></pre>
+<p>The server maps the provider response to the smaller dashboard shape:</p>
+<pre class="language-json"><code>{
+  &quot;id&quot;: &quot;provider-account-id&quot;,
+  &quot;platform&quot;: &quot;twitter&quot;,
+  &quot;username&quot;: &quot;account-name&quot;,
+  &quot;profileId&quot;: &quot;provider-profile-id&quot;,
+  &quot;status&quot;: &quot;connected&quot;
+}</code></pre>
+<p>Provider failures return <code>502</code>.</p>
+<h3>Analytics</h3>
+<pre class="language-http"><code>GET /api/analytics/overview
+GET /api/analytics/posts</code></pre>
+<p>The overview currently calculates counts from stored rows:</p>
+<ul><li>Total content</li><li>Pending content</li><li>Approved content</li><li>Rejected content</li><li>Posted content</li><li>Number of keywords</li></ul>
+<p>Posted history returns all rows whose status is <code>posted</code>.</p>
+<h3>Settings</h3>
+<pre class="language-http"><code>GET   /api/settings
+PATCH /api/settings</code></pre>
+<p>The settings update body can include any of the fields described in the database section. The dashboard validates the interval between 1 and 1440 minutes before submitting it.</p>
+<h2>13. Backend code walkthrough</h2>
+<h3><code>src/app.ts</code></h3>
+<p>This file creates the Express application and configures:</p>
+<ol><li>Pino request logging.</li><li>CORS.</li><li>JSON body parsing.</li><li>URL-encoded body parsing.</li><li>The <code>/api</code> route mount.</li></ol>
+<p>It intentionally does not start the server. Startup belongs in <code>src/index.ts</code>.</p>
+<h3><code>src/index.ts</code></h3>
+<p>This is the composition root. It:</p>
+<ol><li>Validates <code>PORT</code>.</li><li>Registers Telegram approval and rejection callbacks.</li><li>Registers Telegram edit, standard generation, and trending handlers.</li><li>Starts the Telegram polling bot.</li><li>Starts the scheduler.</li><li>Starts Express.</li></ol>
+<p>The handlers keep transport concerns separate from business operations: <code>telegram.ts</code> detects a user action, while <code>index.ts</code> performs the database, Gemini, or Zernio work.</p>
+<h3><code>src/routes/content.ts</code></h3>
+<p>This is the main application route:</p>
+<ul><li>Parses input with generated Zod schemas.</li><li>Reads settings and keywords.</li><li>Calls Gemini.</li><li>Inserts generated items as <code>pending</code>.</li><li>Sends approval messages when Telegram is enabled.</li><li>Updates the stored Telegram message ID.</li><li>Performs dashboard approval/rejection/edit/delete operations.</li><li>Posts to X through the Zernio wrapper.</li><li>Records the resulting status and platform URL.</li></ul>
+<h3><code>src/lib/telegram.ts</code></h3>
+<p>This adapter owns:</p>
+<ul><li>Bot construction.</li><li><code>/chatid</code>, <code>/generate</code>, and <code>/trending</code>.</li><li>Callback-query decoding.</li><li>Approval button messages.</li><li>Edit prompt tracking.</li><li>Telegram notifications.</li><li>Polling startup and shutdown.</li></ul>
+<p>It does not directly query PostgreSQL. Application handlers are injected via registration functions.</p>
+<h3><code>src/lib/scheduler.ts</code></h3>
+<p>The scheduler uses recursive <code>setTimeout</code> rather than <code>setInterval</code>. This ensures the next run is scheduled only after the current run completes. It reads the latest interval from the database for every cycle.</p>
+<h3><code>src/lib/logger.ts</code></h3>
+<p>Pino logs structured events. Production uses normal structured output, while development uses <code>pino-pretty</code>. Authorization headers, cookies, and set-cookie headers are redacted.</p>
+<p>Server code should use <code>req.log</code> for request-scoped logs or the shared <code>logger</code> for non-request code. Do not add <code>console.log</code> to the API.</p>
+<h2>14. Frontend code walkthrough</h2>
+<h3><code>src/App.tsx</code></h3>
+<p>The app creates one TanStack Query client, provides the UI providers, and configures Wouter routes:</p>
+<div class="table-wrap"><table><thead><tr><th>Route</th><th>Page</th></tr></thead><tbody><tr><td><code>/</code></td><td>Overview</td></tr><tr><td><code>/content</code></td><td>Content queue</td></tr><tr><td><code>/keywords</code></td><td>Keyword management</td></tr><tr><td><code>/analytics</code></td><td>Analytics and posted history</td></tr><tr><td><code>/settings</code></td><td>Client, Telegram, scheduler, and Zernio settings</td></tr></tbody></table></div>
+<p>The router uses <code>import.meta.env.BASE_URL</code>, so it remains compatible with the artifact's configured base path.</p>
+<h3><code>src/components/layout.tsx</code></h3>
+<p>The shared layout provides:</p>
+<ul><li>Dark application shell</li><li>Sidebar navigation</li><li>Responsive sidebar controls</li><li>Page header</li><li>Main content container</li></ul>
+<p>The navigation paths match the routes in <code>App.tsx</code>.</p>
+<h3>Dashboard page</h3>
+<p>The overview page calls:</p>
+<ul><li><code>useGetAnalyticsOverview</code></li><li><code>useListContent({ status: &quot;pending&quot; })</code></li></ul>
+<p>It displays status counts and the five most recent pending items.</p>
+<h3>Content queue page</h3>
+<p>The queue page calls:</p>
+<ul><li><code>useListContent</code></li><li><code>useGenerateContent</code></li><li><code>useGenerateTrendingContent</code></li><li><code>useApproveContent</code></li><li><code>useRejectContent</code></li><li><code>useDeleteContent</code></li><li><code>useUpdateContent</code></li><li><code>useListZernioAccounts</code></li></ul>
+<p>The page supports status/type filters, normal generation, trending generation, inline approve/reject, editing, deletion, and links to posted X content.</p>
+<h3>Keywords page</h3>
+<p>The keywords page calls:</p>
+<ul><li><code>useListKeywords</code></li><li><code>useCreateKeyword</code></li><li><code>useDeleteKeyword</code></li></ul>
+<p>The API enforces uniqueness; the UI shows success or failure toasts.</p>
+<h3>Analytics page</h3>
+<p>The analytics page calls:</p>
+<ul><li><code>useGetAnalyticsOverview</code></li><li><code>useListPostedContent</code></li></ul>
+<p>It calculates the approval rate as:</p>
+<pre class="language-text"><code>(approved + posted) / total * 100</code></pre>
+<h3>Settings page</h3>
+<p>The settings page calls:</p>
+<ul><li><code>useGetSettings</code></li><li><code>useUpdateSettings</code></li><li><code>useListZernioAccounts</code></li></ul>
+<p>React Hook Form and Zod validate the form before the generated mutation hook submits the update.</p>
+<h2>15. End-to-end workflows</h2>
+<h3>Manual dashboard generation</h3>
+<pre class="language-text"><code>User opens Content Queue
+        ↓
+User chooses type, optional topic, and count
+        ↓
+POST /api/content/generate
+        ↓
+API loads settings and keywords
+        ↓
+API resolves the topic
+        ↓
+Gemini returns newline-separated content
+        ↓
+API inserts pending content_items
+        ↓
+API sends Telegram approval messages
+        ↓
+Dashboard invalidates React Query cache</code></pre>
+<h3>Trending generation</h3>
+<pre class="language-text"><code>User clicks Trending or sends /trending
+        ↓
+POST /api/content/generate-trending or Telegram handler
+        ↓
+API loads client name, niche, and tone
+        ↓
+Gemini calls Google Search grounding
+        ↓
+Parser extracts TOPIC | TWEET pairs
+        ↓
+API inserts each item as pending
+        ↓
+Telegram approval messages are sent</code></pre>
+<h3>Approval and publishing</h3>
+<pre class="language-text"><code>Reviewer approves
+        ↓
+API resolves selected/default Zernio account
+        ↓
+Zernio creates the post
+        ↓
+Success: status=posted, URL saved
+Failure: status=approved, error logged</code></pre>
+<p>The <code>approved</code> fallback is intentional: it prevents a publishing-provider failure from incorrectly marking the item as rejected. The reviewer can retry from the dashboard after fixing the integration.</p>
+<h3>Rejection</h3>
+<pre class="language-text"><code>Reviewer rejects
+        ↓
+status=rejected
+        ↓
+No Zernio request is made</code></pre>
+<h3>Editing</h3>
+<pre class="language-text"><code>Reviewer edits in dashboard
+        ↓
+PATCH /api/content/:id
+        ↓
+Database content is updated
+
+Reviewer edits in Telegram
+        ↓
+Reply-based prompt is tracked in memory
+        ↓
+Replacement text is validated
+        ↓
+Database content is updated
+        ↓
+Fresh Telegram approval message is sent</code></pre>
+<h2>16. Deployment guide</h2>
+<h3>Replit deployment</h3>
+<p>Replit is the simplest deployment path for the current workspace because the service routing and environment wiring already exist.</p>
+<p>Before publishing:</p>
+<ol><li>Set every required environment variable.</li><li>Run the database schema push against the intended database.</li><li>Verify the API health endpoint.</li><li>Generate one test item.</li><li>Confirm it arrives in the Telegram group.</li><li>Approve a test item only after confirming the selected Zernio account.</li><li>Confirm the X URL is stored in the dashboard.</li><li>Publish the project.</li></ol>
+<p>The API service must remain a continuously running service because it owns Telegram polling and the scheduler.</p>
+<h3>Railway, Render, Fly.io, or another host</h3>
+<p>The same code can be hosted elsewhere, but the deployment should preserve these requirements:</p>
+<ul><li>PostgreSQL must be reachable through <code>DATABASE_URL</code>.</li><li>The API must run as a long-lived Node process.</li><li>The API must expose its <code>/api</code> routes.</li><li>Telegram polling must run in exactly one API instance.</li><li>The dashboard must be able to reach the API origin.</li><li>All secrets must be configured in the provider's secret manager.</li></ul>
+<p>Build and start commands:</p>
+<pre class="language-bash"><code>pnpm install --frozen-lockfile
+pnpm --filter @workspace/api-spec run codegen
+pnpm --filter @workspace/db run push
+pnpm --filter @workspace/api-server run build
+pnpm --filter @workspace/api-server run start</code></pre>
+<p>For the dashboard:</p>
+<pre class="language-bash"><code>pnpm --filter @workspace/dashboard run build</code></pre>
+<p>The dashboard build is written to:</p>
+<pre class="language-text"><code>artifacts/dashboard/dist/public</code></pre>
+<p>If the dashboard and API are placed on separate domains, configure the generated client to use an API base URL or put both behind one reverse proxy so the dashboard's relative <code>/api</code> requests reach the API server. The current Replit setup uses one shared origin and therefore does not require a custom frontend API URL.</p>
+<p>Do not use an instance that sleeps or terminates the API process while the Telegram bot and scheduler are expected to be active. If a provider supports horizontal scaling, run only one Telegram-polling API instance unless the bot transport is redesigned around webhooks or a queue.</p>
+<h3>Production checklist</h3>
+<ul><li>Use a production PostgreSQL database.</li><li>Set <code>NODE_ENV=production</code>.</li><li>Store secrets in the host's secret manager.</li><li>Restrict database access to the API service where possible.</li><li>Use HTTPS for the dashboard and API.</li><li>Confirm CORS policy for separate dashboard/API domains.</li><li>Configure logs and alerting.</li><li>Back up the database.</li><li>Confirm the Telegram bot token is not used by another polling process.</li><li>Test a post with a low-risk content item.</li></ul>
+<h2>17. Security and operational notes</h2>
+<h3>Current security model</h3>
+<p>This is a single-user internal tool and intentionally has no authentication. Anyone who can reach the dashboard or API can use the application. It should not be exposed publicly without adding authentication and authorization.</p>
+<p>The current code does protect secrets in the following ways:</p>
+<ul><li>Provider keys are read from environment variables.</li><li>Keys are not sent to the browser.</li><li>Logger redaction hides authorization headers and cookies.</li><li>Telegram approval is required before normal generated content is posted.</li></ul>
+<h3>Recommended hardening before public multi-user use</h3>
+<p>If this becomes a public product or supports multiple clients, add:</p>
+<ol><li>Clerk or Replit Auth rather than custom password/JWT handling.</li><li>User/client ownership on every database row.</li><li>Authorization middleware on every mutation.</li><li>Encrypted or managed provider credentials.</li><li>Rate limiting for generation and posting.</li><li>Audit records for approvals, edits, and posts.</li><li>Idempotency protection to prevent duplicate posts.</li><li>A durable queue for long-running AI and publishing jobs.</li><li>A persistent edit-session table instead of the in-memory <code>pendingEdits</code> map.</li><li>A direct trend provider or X integration if exact X trend fidelity is</li></ol>
+<p>required.</p>
+<h3>Important reliability behavior</h3>
+<ul><li>Gemini failures are logged and returned as generation errors.</li><li>Trending failures return HTTP <code>502</code>.</li><li>Zernio failures leave the item <code>approved</code> rather than falsely marking it</li></ul>
+<p><code>posted</code>.</p>
+<ul><li>Telegram send failures do not delete the database item.</li><li>Scheduler errors are logged and the scheduler retries its settings read</li></ul>
+<p>after five minutes.</p>
+<ul><li>Telegram polling drops pending Telegram updates on startup.</li></ul>
+<h2>18. Maintenance and extension rules</h2>
+<h3>Adding or changing an API endpoint</h3>
+<ol><li>Edit <code>lib/api-spec/openapi.yaml</code>.</li><li>Add request and response schemas if needed.</li><li>Run:</li></ol>
+<p>``<code>bash pnpm --filter @workspace/api-spec run codegen </code>``</p>
+<ol><li>Add the Express handler under <code>artifacts/api-server/src/routes</code>.</li><li>Register the router in <code>routes/index.ts</code> if it is a new route group.</li><li>Import the generated hook from <code>@workspace/api-client-react</code>.</li><li>Run typechecks.</li></ol>
+<p>Never import generated hooks from relative paths.</p>
+<h3>Adding a database field</h3>
+<ol><li>Update the relevant schema in <code>lib/db/src/schema</code>.</li><li>Update the OpenAPI schema if the field is part of the HTTP response.</li><li>Run the database push command against development.</li><li>Run API-spec codegen if the contract changed.</li><li>Test old and new records where nullable/default behavior matters.</li></ol>
+<h3>Changing AI prompts</h3>
+<p>Keep prompt responsibilities in <code>artifacts/api-server/src/lib/gemini.ts</code>. Preserve the parser's output contract:</p>
+<ul><li>Standard generation: one item per line.</li><li>Trending generation: <code>TOPIC: ... | TWEET: ...</code>.</li></ul>
+<p>If the prompt format changes, update the parser and test with multiple provider response shapes.</p>
+<h3>Changing Telegram behavior</h3>
+<p>Keep Telegram transport and callback parsing in <code>telegram.ts</code>. Register application behavior from <code>index.ts</code>. Do not add a webhook endpoint unless the bot is deliberately migrated away from polling.</p>
+<h3>Changing Zernio behavior</h3>
+<p>Keep SDK-specific request/response details inside <code>zernio-client.ts</code> and <code>routes/zernio.ts</code>. Do not spread provider response shapes through the dashboard or database layer.</p>
+<h2>19. Troubleshooting</h2>
+<h3>API does not start</h3>
+<p>Check:</p>
+<pre class="language-text"><code>PORT
+DATABASE_URL
+GEMINI_API_KEY
+TELEGRAM_BOT_TOKEN
+TELEGRAM_GROUP_CHAT_ID
+ZERNIO_API_KEY</code></pre>
+<p>The integration modules fail fast when their required key is absent.</p>
+<h3>Telegram messages are not arriving</h3>
+<ol><li>Verify <code>TELEGRAM_BOT_TOKEN</code>.</li><li>Verify <code>TELEGRAM_GROUP_CHAT_ID</code> is the group ID, not a personal chat ID.</li><li>Run <code>/chatid</code> inside the target group.</li><li>Ensure the bot is a member of the group.</li><li>Ensure only one process is polling the bot token.</li><li>Check API logs for <code>Failed to send Telegram approval</code>.</li><li>Confirm the Settings toggle for Telegram is enabled.</li></ol>
+<h3><code>/generate</code> works but does not create content</h3>
+<p>Check:</p>
+<ul><li>Gemini key and provider availability.</li><li>At least one keyword, or confirm the fallback topic is acceptable.</li><li>Client settings in <code>/api/settings</code>.</li><li>API logs for <code>Telegram /generate command failed</code> or Gemini errors.</li></ul>
+<h3><code>/trending</code> fails</h3>
+<p>Trending generation depends on Gemini's Google Search tool. Check:</p>
+<ul><li>The Gemini key.</li><li>The configured client niche.</li><li>Gemini/provider availability.</li><li>API logs for <code>Gemini trending generation failed</code>.</li></ul>
+<h3>Approval does not post to X</h3>
+<ol><li>Verify the Zernio key.</li><li>Verify the connected account is active.</li><li>Select the account in Settings.</li><li>Check API logs for <code>Zernio post failed</code>.</li><li>Confirm the item is <code>approved</code>, not <code>rejected</code>.</li></ol>
+<p>An item that stays <code>approved</code> after clicking approve usually indicates that publishing failed or no Zernio account was configured.</p>
+<h3>Dashboard shows a network error</h3>
+<p>Check:</p>
+<ul><li>API service is running.</li><li>Dashboard and API share the expected origin or proxy.</li><li>Requests are sent to <code>/api</code>, not directly to an internal service port.</li><li>The browser is using the correct artifact base path.</li></ul>
+<h3>Scheduler does not run</h3>
+<p>Check:</p>
+<ul><li><code>autoGenerateEnabled</code> is true.</li><li><code>generateInterval</code> is between 1 and 1440.</li><li>The API service has not restarted.</li><li>The database is reachable.</li><li>Telegram is enabled if approval messages are expected.</li></ul>
+<p>The scheduler is process-local, so it resets whenever the API process restarts.</p>
+<h2>20. Useful commands</h2>
+<pre class="language-bash"><code># Install
+pnpm install
+
+# Typecheck everything
+pnpm run typecheck
+
+# Typecheck only the API
+pnpm --filter @workspace/api-server run typecheck
+
+# Typecheck only the dashboard
+pnpm --filter @workspace/dashboard run typecheck
+
+# Regenerate API clients and schemas
+pnpm --filter @workspace/api-spec run codegen
+
+# Push development database schema
+pnpm --filter @workspace/db run push
+
+# Start API in development
+pnpm --filter @workspace/api-server run dev
+
+# Start dashboard in development
+pnpm --filter @workspace/dashboard run dev
+
+# Build API bundle
+pnpm --filter @workspace/api-server run build
+
+# Build dashboard bundle
+pnpm --filter @workspace/dashboard run build
+
+# Health check through the Replit shared proxy
+curl http://localhost:80/api/healthz</code></pre>
+<h2>21. Definition of done</h2>
+<p>The application is ready for client handoff when:</p>
+<ul><li>The database schema is applied to the production database.</li><li>All required secrets are configured.</li><li>The API health endpoint responds successfully.</li><li>The dashboard loads on the public URL.</li><li>Keywords can be added and removed.</li><li>Manual content generation creates a pending item.</li><li>The item arrives in Telegram.</li><li>Telegram edit, reject, and approve actions work.</li><li>A successful approval creates the expected X post.</li><li>The X URL appears in the queue and analytics history.</li><li>Trending generation returns relevant topics.</li><li>Automatic generation works at the selected interval.</li><li>The deployment keeps the API service alive continuously.</li><li>The client has been given the public dashboard URL and Telegram instructions.</li></ul></body></html>

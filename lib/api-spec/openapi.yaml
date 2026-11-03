@@ -1,0 +1,522 @@
+openapi: 3.1.0
+info:
+  # Do not change the title, if the title changes, the import paths will be broken
+  title: Api
+  version: 0.1.0
+  description: AI Social Media Manager API
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: keywords
+    description: Keyword monitoring management
+  - name: content
+    description: AI-generated content management
+  - name: zernio
+    description: Zernio account management
+  - name: analytics
+    description: Analytics and reporting
+  - name: settings
+    description: App settings
+
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      description: Returns server health status
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  /keywords:
+    get:
+      operationId: listKeywords
+      tags: [keywords]
+      summary: List all tracked keywords
+      responses:
+        "200":
+          description: List of keywords
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Keyword"
+    post:
+      operationId: createKeyword
+      tags: [keywords]
+      summary: Add a keyword to monitor
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/KeywordInput"
+      responses:
+        "201":
+          description: Created keyword
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Keyword"
+
+  /keywords/{id}:
+    delete:
+      operationId: deleteKeyword
+      tags: [keywords]
+      summary: Remove a tracked keyword
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: Not found
+
+  /content:
+    get:
+      operationId: listContent
+      tags: [content]
+      summary: List content items
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, approved, rejected, posted]
+        - name: type
+          in: query
+          schema:
+            type: string
+            enum: [tweet, reply, idea]
+      responses:
+        "200":
+          description: List of content items
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ContentItem"
+
+  /content/generate:
+    post:
+      operationId: generateContent
+      tags: [content]
+      summary: Generate AI content based on keywords
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GenerateInput"
+      responses:
+        "201":
+          description: Generated content items
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ContentItem"
+
+  /content/generate-trending:
+    post:
+      operationId: generateTrendingContent
+      tags: [content]
+      summary: Generate tweets based on currently trending X topics
+      responses:
+        "201":
+          description: Generated trending content items
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ContentItem"
+
+  /content/{id}:
+    get:
+      operationId: getContent
+      tags: [content]
+      summary: Get a content item by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Content item
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ContentItem"
+        "404":
+          description: Not found
+    patch:
+      operationId: updateContent
+      tags: [content]
+      summary: Update a content item
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ContentUpdate"
+      responses:
+        "200":
+          description: Updated content item
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ContentItem"
+        "404":
+          description: Not found
+    delete:
+      operationId: deleteContent
+      tags: [content]
+      summary: Delete a content item
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: Not found
+
+  /content/{id}/approve:
+    post:
+      operationId: approveContent
+      tags: [content]
+      summary: Approve and post content via Zernio
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApproveInput"
+      responses:
+        "200":
+          description: Approved and posted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ContentItem"
+        "404":
+          description: Not found
+
+  /content/{id}/reject:
+    post:
+      operationId: rejectContent
+      tags: [content]
+      summary: Reject a content item
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Rejected
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ContentItem"
+        "404":
+          description: Not found
+
+  /zernio/accounts:
+    get:
+      operationId: listZernioAccounts
+      tags: [zernio]
+      summary: List connected Zernio social accounts
+      responses:
+        "200":
+          description: List of connected accounts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ZernioAccount"
+
+  /zernio/profiles:
+    get:
+      operationId: listZernioProfiles
+      tags: [zernio]
+      summary: List Zernio profiles
+      responses:
+        "200":
+          description: List of profiles
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ZernioProfile"
+
+  /analytics/overview:
+    get:
+      operationId: getAnalyticsOverview
+      tags: [analytics]
+      summary: Get analytics overview counts
+      responses:
+        "200":
+          description: Analytics overview
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnalyticsOverview"
+
+  /analytics/posts:
+    get:
+      operationId: listPostedContent
+      tags: [analytics]
+      summary: List all posted content items
+      responses:
+        "200":
+          description: Posted content list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ContentItem"
+
+  /settings:
+    get:
+      operationId: getSettings
+      tags: [settings]
+      summary: Get app settings
+      responses:
+        "200":
+          description: App settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AppSettings"
+    patch:
+      operationId: updateSettings
+      tags: [settings]
+      summary: Update app settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SettingsUpdate"
+      responses:
+        "200":
+          description: Updated settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AppSettings"
+
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required:
+        - status
+
+    Keyword:
+      type: object
+      required: [id, text, createdAt]
+      properties:
+        id:
+          type: integer
+        text:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+
+    KeywordInput:
+      type: object
+      required: [text]
+      properties:
+        text:
+          type: string
+          minLength: 1
+
+    ContentItem:
+      type: object
+      required: [id, type, topic, content, status, createdAt, updatedAt]
+      properties:
+        id:
+          type: integer
+        type:
+          type: string
+          enum: [tweet, reply, idea]
+        topic:
+          type: string
+        content:
+          type: string
+        status:
+          type: string
+          enum: [pending, approved, rejected, posted]
+        platformPostUrl:
+          type: ["string", "null"]
+        zernioAccountId:
+          type: ["string", "null"]
+        telegramMessageId:
+          type: ["integer", "null"]
+        scheduledFor:
+          type: ["string", "null"]
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    GenerateInput:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [tweet, reply, idea]
+        topic:
+          type: ["string", "null"]
+        count:
+          type: integer
+          minimum: 1
+          maximum: 10
+
+    ContentUpdate:
+      type: object
+      properties:
+        content:
+          type: string
+        status:
+          type: string
+          enum: [pending, approved, rejected, posted]
+        scheduledFor:
+          type: ["string", "null"]
+          format: date-time
+
+    ApproveInput:
+      type: object
+      properties:
+        zernioAccountId:
+          type: ["string", "null"]
+        scheduledFor:
+          type: ["string", "null"]
+          format: date-time
+
+    ZernioAccount:
+      type: object
+      required: [id, platform, username]
+      properties:
+        id:
+          type: string
+        platform:
+          type: string
+        username:
+          type: string
+        profileId:
+          type: ["string", "null"]
+        status:
+          type: ["string", "null"]
+
+    ZernioProfile:
+      type: object
+      required: [id, name]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        color:
+          type: ["string", "null"]
+
+    AnalyticsOverview:
+      type: object
+      required: [total, pending, approved, rejected, posted, keywords]
+      properties:
+        total:
+          type: integer
+        pending:
+          type: integer
+        approved:
+          type: integer
+        rejected:
+          type: integer
+        posted:
+          type: integer
+        keywords:
+          type: integer
+
+    AppSettings:
+      type: object
+      required: [defaultZernioAccountId, telegramEnabled, autoGenerateEnabled, generateInterval]
+      properties:
+        defaultZernioAccountId:
+          type: ["string", "null"]
+        telegramEnabled:
+          type: boolean
+        autoGenerateEnabled:
+          type: boolean
+        generateInterval:
+          type: integer
+        clientName:
+          type: ["string", "null"]
+        clientNiche:
+          type: ["string", "null"]
+        clientTone:
+          type: ["string", "null"]
+
+    SettingsUpdate:
+      type: object
+      properties:
+        defaultZernioAccountId:
+          type: ["string", "null"]
+        telegramEnabled:
+          type: boolean
+        autoGenerateEnabled:
+          type: boolean
+        generateInterval:
+          type: integer
+        clientName:
+          type: ["string", "null"]
+        clientNiche:
+          type: ["string", "null"]
+        clientTone:
+          type: ["string", "null"]
